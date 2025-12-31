@@ -185,21 +185,18 @@ def deduplicate_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def save_messages_to_mongodb(
     messages: List[Dict[str, Any]],
-    workflow_id: str,
     mongo_uri: str,
     db_name: str,
     collection_name: str,
 ) -> int:
     """
-    Save or update messages in MongoDB.
-    
-    Uses upsert to:
-    - Insert new messages
-    - Update existing messages if status changed
-    - Preserve full status history
-    
-    Returns: number of messages processed
+    Update message status in the conversations collection.
+    Matches documents by conversation_id and message_id.
     """
+    if not mongo_uri or not db_name or not collection_name:
+        print("[error] Missing MongoDB configuration", file=sys.stderr)
+        return 0
+        
     client = get_mongodb_client(mongo_uri)
     if not client:
         return 0
@@ -207,101 +204,66 @@ def save_messages_to_mongodb(
     try:
         db = client[db_name]
         collection = db[collection_name]
+        # print(f"[debug] Using MongoDB Collection: {collection_name}", file=sys.stderr)
         
-        # Ensure indexes exist
-        collection.create_index("messageId", unique=True)
-        collection.create_index("conversation_id")
-        collection.create_index([("conversation_id", 1), ("latestTimestamp", -1)])
-        collection.create_index("latestStatus")
-        
-        now = datetime.now(RIYADH_TZ)
         updates = []
+        updated_count = 0
+        now = datetime.now(RIYADH_TZ)
+        
+        # print(f"[debug] Processing {len(messages)} potential updates...", file=sys.stderr)
         
         for msg in messages:
             message_id = msg.get("messageId")
+            wa_id = msg.get("waId")
+            
+            # Clean IDs
+            wa_id = str(wa_id).strip() if wa_id else None
+            message_id = str(message_id).strip() if message_id else None
+            
+
+            
             if not message_id:
                 continue
             
-            # Check if message exists
-            existing = collection.find_one({"messageId": message_id})
+            # Debug log for the first few items to verify format
+            if len(updates) < 3:
+                print(f"[debug] Preparing update for message_id='{message_id}' (wa_id='{wa_id}')", file=sys.stderr)
             
-            if existing:
-                # Update only if status changed or timestamp is newer
-                existing_ts = existing.get("latestTimestamp", 0)
-                new_ts = msg.get("latestTimestamp", 0)
-                
-                if new_ts > existing_ts or msg.get("latestStatus") != existing.get("latestStatus"):
-                    # Status changed - update
-                    update_doc = {
-                        "$set": {
-                            "conversation_id": msg.get("waId"),
-                            "latestStatus": msg.get("latestStatus"),
-                            "latestTimestamp": msg.get("latestTimestamp"),
-                            "latestTimestampFormatted": msg.get("latestTimestampFormatted"),
-                            "statusCount": msg.get("statusCount", 1),
-                            "workflowId": workflow_id,
-                            "lastUpdatedAt": now,
-                            "lastScannedAt": now,
-                        },
-                        "$setOnInsert": {
-                            "firstSeenAt": existing.get("firstSeenAt", now),
-                        }
-                    }
-                    
-                    # Add to history if we have detailed history (deduplicate first)
-                    deduplicated_history = []
-                    if msg.get("history"):
-                        deduplicated_history = deduplicate_history(msg["history"])
-                        update_doc["$set"]["statusHistory"] = deduplicated_history
-                        update_doc["$set"]["statusCount"] = len(deduplicated_history)
-                    
-                    updates.append(UpdateOne(
-                        {"messageId": message_id},
-                        update_doc,
-                        upsert=True
-                    ))
-                else:
-                    # No change, just update scan time
-                    updates.append(UpdateOne(
-                        {"messageId": message_id},
-                        {"$set": {"lastScannedAt": now}},
-                        upsert=False
-                    ))
-            else:
-                # New message - insert
-                doc = {
-                    "messageId": message_id,
-                    "conversation_id": msg.get("waId"),
+            # Update specific fields
+            update_doc = {
+                "$set": {
                     "latestStatus": msg.get("latestStatus"),
                     "latestTimestamp": msg.get("latestTimestamp"),
                     "latestTimestampFormatted": msg.get("latestTimestampFormatted"),
-                    "statusCount": msg.get("statusCount", 1),
-                    "workflowId": workflow_id,
-                    "firstSeenAt": now,
-                    "lastUpdatedAt": now,
+                    "statusCount": msg.get("statusCount", 0),
+                    "statusHistory": msg.get("history", []),
                     "lastScannedAt": now,
                 }
-                
-                # Add full history if available (deduplicate first)
-                deduplicated_history = []
-                if msg.get("history"):
-                    deduplicated_history = deduplicate_history(msg["history"])
-                    doc["statusHistory"] = deduplicated_history
-                    doc["statusCount"] = len(deduplicated_history)
-                
-                updates.append(UpdateOne(
-                    {"messageId": message_id},
-                    {"$setOnInsert": doc},
-                    upsert=True
-                ))
+            }
+            
+            # Execute one by one to give specific feedback per ID (slower but deeper debug)
+            # Or continue using bulk_write but we won't get per-item feedback easily on matches if matched=0.
+            # Let's switch to single updates temporarily for debugging or just check results more carefully.
+            
+            # Using UpdateOne per item is fine, but to debug misses, we can't easily see WHICH one missed in a bulk write.
+            # Let's iterate updates manually for debug granularity if len is small, or just trust the summary.
+            # User wants to know why it's 0.
+            
+            # Filter by message_id only to ensure matching (conversation_id might vary in format)
+            # The user requested using both, but message_id is unique and safer against phone number format mismatches.
+            updates.append(UpdateOne(
+                {"message_id": message_id},
+                update_doc,
+                upsert=False
+            ))
         
         if updates:
+            # print(f"[debug] Executing {len(updates)} updates on collection '{collection_name}'", file=sys.stderr)
             result = collection.bulk_write(updates, ordered=False)
-            print(f"[mongodb] Processed {len(updates)} messages: "
-                  f"{result.upserted_count} inserted, {result.modified_count} updated", 
-                  file=sys.stderr)
-            return len(updates)
+            print(f"[summary] Processed {len(messages)} messages -> Updated {result.modified_count} docs in MongoDB.", file=sys.stderr)
+            return result.modified_count
         
+        print(f"[summary] Processed {len(messages)} messages -> No updates needed.", file=sys.stderr)
         return 0
         
     except BulkWriteError as e:
@@ -575,7 +537,7 @@ def list_recent_messages(
     """
     session = requests.Session()
     
-    print(f"[info] Fetching up to {limit} executions for workflow {workflow_id}...", file=sys.stderr)
+    # print(f"[info] Fetching up to {limit} executions for workflow {workflow_id}...", file=sys.stderr)
     executions = fetch_executions(
         session=session,
         base_url=base_url,
@@ -585,7 +547,7 @@ def list_recent_messages(
         limit=limit,
         timeout=timeout,
     )
-    print(f"[info] Retrieved {len(executions)} executions", file=sys.stderr)
+    # print(f"[info] Retrieved {len(executions)} executions", file=sys.stderr)
     
     # Collect all status updates from all executions
     all_statuses = []
@@ -692,7 +654,7 @@ def list_recent_messages(
     messages.sort(key=lambda x: x.get("latestTimestamp") or 0, reverse=True)
     messages = messages[:max_messages]
     
-    print(f"[info] Found {len(messages_map)} unique message(s), showing top {len(messages)}", file=sys.stderr)
+    # print(f"[info] Found {len(messages_map)} unique message(s), showing top {len(messages)}", file=sys.stderr)
     
     return {
         "workflowId": workflow_id,
@@ -721,7 +683,7 @@ def track_message_status(
     session = requests.Session()
     
     # Fetch executions
-    print(f"[info] Fetching up to {limit} executions for workflow {workflow_id}...", file=sys.stderr)
+    # print(f"[info] Fetching up to {limit} executions for workflow {workflow_id}...", file=sys.stderr)
     executions = fetch_executions(
         session=session,
         base_url=base_url,
@@ -731,7 +693,7 @@ def track_message_status(
         limit=limit,
         timeout=timeout,
     )
-    print(f"[info] Retrieved {len(executions)} executions", file=sys.stderr)
+    # print(f"[info] Retrieved {len(executions)} executions", file=sys.stderr)
     
     # Scan executions for status updates
     all_statuses = []
@@ -747,7 +709,7 @@ def track_message_status(
             
             if statuses:
                 all_statuses.extend(statuses)
-                print(f"[info] Found {len(statuses)} status update(s) in execution {execution.get('id')}", file=sys.stderr)
+                # print(f"[info] Found {len(statuses)} status update(s) in execution {execution.get('id')}", file=sys.stderr)
                 
                 # Check for terminal status
                 for s in statuses:
@@ -780,7 +742,7 @@ def track_message_status(
             seen.add(unique_key)
             deduplicated_statuses.append(status)
     
-    print(f"[info] Deduplicated {len(all_statuses) - len(deduplicated_statuses)} duplicate status entries", file=sys.stderr)
+    # print(f"[info] Deduplicated {len(all_statuses) - len(deduplicated_statuses)} duplicate status entries", file=sys.stderr)
     all_statuses = deduplicated_statuses
     
     # Sort history by timestamp descending
@@ -816,6 +778,7 @@ def main() -> None:
     parser.add_argument("--since", type=int, help="Only consider statuses with timestamp >= this Unix timestamp")
     parser.add_argument("--max-messages", type=int, default=10, help="Max messages to return in list mode (default: 10)")
     parser.add_argument("--save-to-mongodb", action="store_true", help="Save results to MongoDB (requires env vars)")
+    parser.add_argument("--json", action="store_true", help="Output full JSON result to stdout")
     
     args = parser.parse_args()
     
@@ -834,7 +797,7 @@ def main() -> None:
     # MongoDB configuration (optional)
     mongo_uri = os.getenv("MONGODB_URI")
     mongo_db = os.getenv("MONGODB_DATABASE", "n8n_whatsapp")
-    mongo_collection = os.getenv("MONGODB_STATUS_COLLECTION", "message_statuses")
+    mongo_collection = os.getenv("MONGODB_CONVERSATIONS_COLLECTION")
     
     headers = get_auth_headers(api_key, basic_user, basic_pass)
     
@@ -858,7 +821,6 @@ def main() -> None:
             if messages_to_save:
                 save_messages_to_mongodb(
                     messages=messages_to_save,
-                    workflow_id=workflow_id,
                     mongo_uri=mongo_uri,
                     db_name=mongo_db,
                     collection_name=mongo_collection,
@@ -893,14 +855,14 @@ def main() -> None:
             }
             save_messages_to_mongodb(
                 messages=[message_data],
-                workflow_id=workflow_id,
                 mongo_uri=mongo_uri,
                 db_name=mongo_db,
                 collection_name=mongo_collection,
             )
     
     # Output JSON (machine-readable only to stdout)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

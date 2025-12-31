@@ -57,6 +57,7 @@ N8N_BASE_URL=https://n8n.agentiq.llc
 N8N_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwOWU1MmVhMC1jOTBjLTQyMjYtOGY5Ny1jNzM5ZWU3ZWJhNDciLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzY2Mzg1NjU5fQ.UMwRweOXEvEzuEyZMKjzDEOsyU-piPX-7p_v5eCAhWM
 MONGODB_URI="mongodb+srv://ageentiq:Co2x5Lgn0ifjnhyy@cluster0.uofyoid.mongodb.net/Osus_live2?retryWrites=true&w=majority&maxPoolSize=5&maxIdleTimeMS=60000"
 MONGODB_DATABASE=Osus_live2
+MONGODB_CONVERSATIONS_COLLECTION=converation_history
 MONGODB_STATUS_COLLECTION=conversation_status
 ```
 
@@ -76,13 +77,13 @@ Add these 3 lines to the bottom of the file:
 
 ```bash
 # Run immediately at the start of the minute
-* * * * * cd /home/ageentiq/ms_status && /home/ageentiq/ms_status/venv/bin/python3 track_message_status.py --max-messages 50 --save-to-mongodb >> /home/ageentiq/ms_status/tracker.log 2>&1
+* * * * * cd /home/ageentiq/ms_status && /home/ageentiq/ms_status/venv/bin/python3 track_message_status.py --max-messages 100 --save-to-mongodb >> /home/ageentiq/ms_status/tracker.log 2>&1
 
 # Run with 20 second delay
-* * * * * sleep 20 && cd /home/ageentiq/ms_status && /home/ageentiq/ms_status/venv/bin/python3 track_message_status.py --max-messages 50 --save-to-mongodb >> /home/ageentiq/ms_status/tracker.log 2>&1
+* * * * * sleep 20 && cd /home/ageentiq/ms_status && /home/ageentiq/ms_status/venv/bin/python3 track_message_status.py --max-messages 100 --save-to-mongodb >> /home/ageentiq/ms_status/tracker.log 2>&1
 
 # Run with 40 second delay
-* * * * * sleep 40 && cd /home/ageentiq/ms_status && /home/ageentiq/ms_status/venv/bin/python3 track_message_status.py --max-messages 50 --save-to-mongodb >> /home/ageentiq/ms_status/tracker.log 2>&1
+* * * * * sleep 40 && cd /home/ageentiq/ms_status && /home/ageentiq/ms_status/venv/bin/python3 track_message_status.py --max-messages 100 --save-to-mongodb >> /home/ageentiq/ms_status/tracker.log 2>&1
 ```
 
 ### Step 3: Verify

@@ -99,6 +99,7 @@ Add these to your `.env` file:
 # MONGODB_URI=mongodb://localhost:27017
 # Or for MongoDB Atlas:
 MONGODB_STATUS_COLLECTION=conversation_status
+MONGODB_CONVERSATIONS_COLLECTION=converation_history
 MONGODB_DATABASE=Osus_live2
 MONGODB_URI="mongodb+srv://ageentiq:Co2x5Lgn0ifjnhyy@cluster0.uofyoid.mongodb.net/Osus_live2?retryWrites=true&w=majority&maxPoolSize=5&maxIdleTimeMS=60000"
 
